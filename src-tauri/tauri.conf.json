@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DiskWipe.IO",
+  "version": "0.1.0",
+  "identifier": "io.diskwipe.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "DiskWipe.IO",
+        "width": 1120,
+        "height": 740,
+        "minWidth": 920,
+        "minHeight": 600,
+        "theme": "Dark"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Utility",
+    "shortDescription": "SMART monitoring & secure disk formatting",
+    "longDescription": "DiskWipe.IO reads disk S.M.A.R.T. health like CrystalDiskInfo, performs quick or full (sector-by-sector) formats with system-disk protection, and exports SMART reports to PDF.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "linux": {
+      "rpm": {
+        "depends": ["smartmontools"]
+      },
+      "deb": {
+        "depends": ["smartmontools"]
+      }
+    }
+  }
+}

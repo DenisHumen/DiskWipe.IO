@@ -1,0 +1,195 @@
+import { jsPDF } from "jspdf";
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import type { DiskInfo, SmartReport } from "../types";
+import { formatBytes } from "./format";
+
+const CLAY: [number, number, number] = [217, 119, 87];
+const INK: [number, number, number] = [40, 38, 34];
+const MUTED: [number, number, number] = [120, 114, 104];
+const LINE: [number, number, number] = [220, 214, 205];
+
+function healthLabel(report: SmartReport): string {
+  switch (report.overall) {
+    case "good":
+      return "GOOD";
+    case "caution":
+      return "CAUTION";
+    case "bad":
+      return "BAD";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+/** Render a SMART report into a PDF document and return its bytes. */
+export function buildSmartPdf(disk: DiskInfo, report: SmartReport): Uint8Array {
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const margin = 48;
+  let y = margin;
+
+  // Header band
+  doc.setFillColor(...CLAY);
+  doc.rect(0, 0, pageW, 8, "F");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(22);
+  doc.setTextColor(...INK);
+  doc.text("DiskWipe.IO", margin, (y += 26));
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(11);
+  doc.setTextColor(...MUTED);
+  doc.text("S.M.A.R.T. Health Report", margin, (y += 18));
+  doc.text(new Date().toLocaleString(), pageW - margin, y, { align: "right" });
+
+  y += 14;
+  doc.setDrawColor(...LINE);
+  doc.line(margin, y, pageW - margin, y);
+  y += 26;
+
+  // Device summary
+  const rows: [string, string][] = [
+    ["Model", report.model || disk.model || "—"],
+    ["Serial", report.serial || disk.serial || "—"],
+    ["Firmware", report.firmware || "—"],
+    ["Device", report.device || disk.path],
+    ["Protocol", report.protocol || "—"],
+    ["Capacity", formatBytes(report.capacityBytes || disk.sizeBytes)],
+    [
+      "Temperature",
+      report.temperatureC != null ? `${report.temperatureC} °C` : "—",
+    ],
+    [
+      "Power-On Hours",
+      report.powerOnHours != null ? `${report.powerOnHours} h` : "—",
+    ],
+    ["Power Cycles", report.powerCycles != null ? `${report.powerCycles}` : "—"],
+  ];
+
+  doc.setFontSize(11);
+  for (const [k, v] of rows) {
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...MUTED);
+    doc.text(k, margin, y);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...INK);
+    doc.text(String(v), margin + 130, y);
+    y += 18;
+  }
+
+  // Overall health badge
+  y += 8;
+  const label = healthLabel(report);
+  const badgeColor: [number, number, number] =
+    report.overall === "good"
+      ? [127, 170, 111]
+      : report.overall === "caution"
+      ? [217, 164, 65]
+      : report.overall === "bad"
+      ? [217, 109, 94]
+      : MUTED;
+  doc.setFillColor(...badgeColor);
+  doc.roundedRect(margin, y - 12, 150, 24, 6, 6, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(255, 255, 255);
+  doc.text(`HEALTH: ${label}`, margin + 12, y + 4);
+  y += 36;
+
+  // Attributes table (ATA) or NVMe key/values
+  doc.setDrawColor(...LINE);
+  doc.line(margin, y, pageW - margin, y);
+  y += 22;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(...MUTED);
+
+  if (report.attributes.length > 0) {
+    const cols = [margin, margin + 36, margin + 250, margin + 300, margin + 350, margin + 410];
+    doc.text("ID", cols[0], y);
+    doc.text("Attribute", cols[1], y);
+    doc.text("Val", cols[2], y);
+    doc.text("Wrst", cols[3], y);
+    doc.text("Thr", cols[4], y);
+    doc.text("Raw", cols[5], y);
+    y += 6;
+    doc.line(margin, y, pageW - margin, y);
+    y += 16;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    for (const a of report.attributes) {
+      if (y > 780) {
+        doc.addPage();
+        y = margin;
+      }
+      const color: [number, number, number] =
+        a.status === "bad" ? [217, 109, 94] : a.status === "warn" ? [217, 164, 65] : INK;
+      doc.setTextColor(...color);
+      doc.text(String(a.id), cols[0], y);
+      doc.text(a.name.slice(0, 34), cols[1], y);
+      doc.text(String(a.value), cols[2], y);
+      doc.text(String(a.worst), cols[3], y);
+      doc.text(String(a.threshold), cols[4], y);
+      doc.text(String(a.raw).slice(0, 22), cols[5], y);
+      y += 15;
+    }
+  } else if (report.nvme) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    for (const [k, v] of Object.entries(report.nvme)) {
+      if (y > 780) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.setTextColor(...MUTED);
+      doc.text(k.replace(/_/g, " "), margin, y);
+      doc.setTextColor(...INK);
+      doc.text(String(v), margin + 280, y);
+      y += 16;
+    }
+  }
+
+  // Footer
+  const pages = doc.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(...MUTED);
+    doc.text(
+      "Generated by DiskWipe.IO — github.com/DiskWipe-IO",
+      margin,
+      doc.internal.pageSize.getHeight() - 24
+    );
+    doc.text(
+      `Page ${i} / ${pages}`,
+      pageW - margin,
+      doc.internal.pageSize.getHeight() - 24,
+      { align: "right" }
+    );
+  }
+
+  return new Uint8Array(doc.output("arraybuffer"));
+}
+
+/** Build the PDF and prompt the user for a save location. Returns the path or null. */
+export async function saveSmartPdf(
+  disk: DiskInfo,
+  report: SmartReport
+): Promise<string | null> {
+  const bytes = buildSmartPdf(disk, report);
+  const safe = (report.serial || report.model || "disk")
+    .replace(/[^a-z0-9_-]+/gi, "_")
+    .slice(0, 40);
+  const path = await save({
+    title: "Save SMART report",
+    defaultPath: `SMART_${safe}.pdf`,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!path) return null;
+  await invoke("save_file", { path, contents: Array.from(bytes) });
+  return path;
+}
