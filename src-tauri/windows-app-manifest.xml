@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    Common Controls v6 is required by Tauri's dialog APIs when a custom
+    manifest is supplied (otherwise native dialogs fail to initialise).
+  -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+
+  <!--
+    Reading raw S.M.A.R.T. data from \\.\PhysicalDrive* and wiping disks with
+    diskpart both require administrator rights on Windows. Branding the exe as
+    requireAdministrator makes Windows show a UAC prompt at launch so SMART and
+    formatting work out of the box (this is how CrystalDiskInfo runs too).
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

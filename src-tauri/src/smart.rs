@@ -26,21 +26,62 @@ pub fn report(device: &str) -> Result<SmartReport, String> {
 }
 
 fn run_smartctl(device: &str) -> Result<Value, String> {
-    let mut value = invoke_smartctl(device, None)?;
-    // Some USB/SAT bridges need an explicit device type to expose SMART data.
-    let needs_retry = value.get("ata_smart_attributes").is_none()
-        && value.get("nvme_smart_health_information_log").is_none()
-        && value.get("smart_status").is_none();
-    if needs_retry {
-        if let Ok(retried) = invoke_smartctl(device, Some("sat")) {
-            if retried.get("ata_smart_attributes").is_some()
-                || retried.get("smart_status").is_some()
-            {
-                value = retried;
+    // Try each candidate device spelling / device-type in turn and keep the
+    // first response that actually carries SMART data. Different drives need
+    // different hints: NVMe SSDs want `-d nvme`, USB bridges want `-d sat`,
+    // and on Windows the raw `\\.\PhysicalDriveN` handle sometimes only works
+    // under an explicit type or the `/dev/sdX` spelling.
+    let mut last: Option<Value> = None;
+    for (dev, dtype) in candidate_invocations(device) {
+        match invoke_smartctl(&dev, dtype) {
+            Ok(v) => {
+                if has_smart_payload(&v) {
+                    return Ok(v);
+                }
+                last = Some(v);
             }
+            Err(_) => continue,
         }
     }
-    Ok(value)
+    last.ok_or_else(|| format!("smartctl returned no usable data for {device}"))
+}
+
+/// Whether a parsed smartctl response carries any usable health payload.
+fn has_smart_payload(v: &Value) -> bool {
+    v.get("ata_smart_attributes").is_some()
+        || v.get("nvme_smart_health_information_log").is_some()
+        || v.get("smart_status").is_some()
+}
+
+/// Ordered list of `(device, device-type)` pairs to probe for a given disk.
+fn candidate_invocations(device: &str) -> Vec<(String, Option<&'static str>)> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut list: Vec<(String, Option<&'static str>)> = vec![
+            (device.to_string(), None),        // auto-detect (SATA/ATA)
+            (device.to_string(), Some("nvme")), // NVMe SSDs
+            (device.to_string(), Some("sat")),  // USB / SAT bridges
+            (device.to_string(), Some("ata")),  // direct ATA pass-through
+        ];
+        // Some smartmontools builds only accept the Unix-style `/dev/sdX`
+        // spelling, where X maps PhysicalDrive0 -> a, 1 -> b, and so on.
+        if let Some(n) = crate::util::trailing_number(device) {
+            if n < 26 {
+                let letter = (b'a' + n as u8) as char;
+                let sd = format!("/dev/sd{letter}");
+                list.push((sd.clone(), None));
+                list.push((sd, Some("nvme")));
+            }
+        }
+        list
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        vec![
+            (device.to_string(), None),
+            (device.to_string(), Some("sat")),
+        ]
+    }
 }
 
 fn invoke_smartctl(device: &str, dtype: Option<&str>) -> Result<Value, String> {

@@ -27,10 +27,25 @@ pub struct CmdOutput {
     pub success: bool,
 }
 
+/// Build a `Command` that never pops up a console window on Windows. Without
+/// this flag every `smartctl` / `diskpart` / `powershell` call would flash a
+/// black console, which both looks broken and steals focus from the UI.
+fn command(cmd: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut c = Command::new(cmd);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        c.creation_flags(CREATE_NO_WINDOW);
+    }
+    c
+}
+
 /// Run a command and capture its output without treating a non-zero exit as a
 /// hard error (some tools, like `smartctl`, use the exit code as a bit-field).
 pub fn run_capture(cmd: &str, args: &[&str]) -> Result<CmdOutput, String> {
-    let out = Command::new(cmd)
+    let out = command(cmd)
         .args(args)
         .output()
         .map_err(|e| format!("failed to launch `{cmd}`: {e}"))?;
@@ -66,7 +81,7 @@ pub fn is_admin() -> bool {
 #[cfg(windows)]
 pub fn is_admin() -> bool {
     // `net session` succeeds only from an elevated administrator context.
-    Command::new("net")
+    command("net")
         .args(["session"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

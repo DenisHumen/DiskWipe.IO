@@ -165,6 +165,15 @@ update manifest to the GitHub Release.
 Issues and pull requests are welcome. The CI builds and tests every push to
 `main` and produces installers for all supported platforms.
 
-## 📄 License
+## � Credits
+
+- [smartmontools](https://www.smartmontools.org/) (`smartctl`) — GPL — bundled to
+  read S.M.A.R.T. data on every platform.
+- [CrystalDiskInfo](https://github.com/hiyohiyo/CrystalDiskInfo) — MIT — the
+  inspiration for the health model and SMART presentation. Like CrystalDiskInfo,
+  DiskWipe.IO requests administrator rights on Windows so it can read raw drive
+  health.
+
+## �📄 License
 
 [MIT](LICENSE) © DiskWipe.IO contributors
