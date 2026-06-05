@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import { Activity, Eraser, TriangleAlert, HardDrive } from "lucide-react";
+import { Activity, Eraser, TriangleAlert, HardDrive, Github } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { DiskInfo, SmartReport } from "./types";
 import { listDisks, getSmart, smartctlAvailable } from "./lib/api";
+import {
+  checkAndInstallUpdate,
+  REPO_URL,
+  type UpdateStage,
+} from "./lib/updater";
 import { DiskList } from "./components/DiskList";
 import { SmartPanel } from "./components/SmartPanel";
 import { FormatPanel } from "./components/FormatPanel";
+import { UpdateBanner } from "./components/UpdateBanner";
 
 type Tab = "health" | "format";
 
@@ -18,6 +25,8 @@ export default function App() {
   const [loadingSmart, setLoadingSmart] = useState(false);
   const [smartError, setSmartError] = useState<string | null>(null);
   const [smartctlOk, setSmartctlOk] = useState(true);
+
+  const [updateStage, setUpdateStage] = useState<UpdateStage>({ kind: "idle" });
 
   const refreshDisks = useCallback(async () => {
     setLoadingDisks(true);
@@ -55,6 +64,8 @@ export default function App() {
   useEffect(() => {
     smartctlAvailable().then(setSmartctlOk).catch(() => setSmartctlOk(false));
     refreshDisks();
+    // Check for updates on startup; download & install automatically if any.
+    checkAndInstallUpdate(setUpdateStage).catch(() => {});
   }, [refreshDisks]);
 
   useEffect(() => {
@@ -91,23 +102,35 @@ export default function App() {
             </div>
           </div>
 
-          {selected && (
-            <nav className="flex items-center gap-1 rounded-lg bg-canvas-inset p-1">
-              <TabButton
-                active={tab === "health"}
-                onClick={() => setTab("health")}
-                icon={<Activity size={15} />}
-                label="Health"
-              />
-              <TabButton
-                active={tab === "format"}
-                onClick={() => setTab("format")}
-                icon={<Eraser size={15} />}
-                label="Format"
-              />
-            </nav>
-          )}
+          <div className="flex items-center gap-3">
+            {selected && (
+              <nav className="flex items-center gap-1 rounded-lg bg-canvas-inset p-1">
+                <TabButton
+                  active={tab === "health"}
+                  onClick={() => setTab("health")}
+                  icon={<Activity size={15} />}
+                  label="Health"
+                />
+                <TabButton
+                  active={tab === "format"}
+                  onClick={() => setTab("format")}
+                  icon={<Eraser size={15} />}
+                  label="Format"
+                />
+              </nav>
+            )}
+
+            <button
+              className="btn-ghost h-8 w-8 !px-0"
+              title="Open project on GitHub"
+              aria-label="Open project on GitHub"
+              onClick={() => openUrl(REPO_URL).catch(() => {})}
+            >
+              <Github size={17} />
+            </button>
+          </div>
         </header>
+
 
         {!smartctlOk && (
           <div className="flex items-center gap-2 border-b border-warn/20 bg-warn/5 px-6 py-2 text-xs text-warn">
@@ -141,6 +164,8 @@ export default function App() {
             />
           )}
         </section>
+
+        <UpdateBanner stage={updateStage} />
       </main>
     </div>
   );

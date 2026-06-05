@@ -32,6 +32,12 @@ erase, and export a SMART report to PDF — all from one clean, Claude-inspired 
   exact device serial number to unlock.
 - **PDF reports** — export the SMART health of any disk to a clean PDF, choosing
   exactly where to save it.
+- **Batteries included** — `smartctl` ships **inside the installer**, so SMART
+  works out of the box with nothing else to install.
+- **Automatic updates** — on launch the app checks GitHub for a newer signed
+  release and, if found, downloads and installs it, then restarts.
+- **One-click repository link** — the GitHub icon in the header opens the
+  project page.
 - **Native & lightweight** — built with Tauri 2; ships as a small `.exe`/`.msi`
   on Windows and `.deb` / `.AppImage` / `.rpm` on Linux.
 
@@ -55,6 +61,10 @@ Grab the latest installers from the
 - **Ubuntu / Debian** — `.deb` or the portable `.AppImage`
 - **Fedora / RHEL** — `.rpm` or the portable `.AppImage`
 
+`smartctl` is bundled inside every installer, so SMART reads work immediately.
+The app also **updates itself**: each launch it checks the latest release and
+installs a newer signed build automatically.
+
 Releases are built automatically by CI whenever a `vX.Y.Z` tag is pushed.
 
 ## 🔒 Safety model
@@ -75,9 +85,11 @@ If any check fails, nothing is written.
 
 - [Node.js](https://nodejs.org/) 18+
 - [Rust](https://rustup.rs/) (stable)
-- **smartmontools** (`smartctl`) for SMART data
+- **smartmontools** — only needed for *local development*. Installed builds ship
+  their own `smartctl`, but `tauri dev` uses one from `PATH`:
   - Ubuntu/Debian: `sudo apt install smartmontools`
   - Fedora: `sudo dnf install smartmontools`
+  - macOS: `brew install smartmontools`
   - Windows: [download installer](https://www.smartmontools.org/) and add to `PATH`
 - Linux only: WebKitGTK & GTK dev libraries (see CI for the exact list)
 
@@ -118,6 +130,35 @@ React + TypeScript + Tailwind  ──invoke──▶  Rust (Tauri 2) backend
 | Quick format   | `diskpart`              | `wipefs` + `mkfs.*`         |
 | Full erase     | `diskpart clean all`    | zero-fill + `mkfs.*`        |
 | System disk    | `IsBoot` / `IsSystem`   | root/boot mountpoint        |
+
+## 🔁 Releases & auto-update (maintainers)
+
+The auto-updater verifies a cryptographic signature, so release bundles must be
+signed in CI. Two repository **secrets** are required before pushing a release
+tag:
+
+| Secret | Value |
+| ------ | ----- |
+| `TAURI_SIGNING_PRIVATE_KEY` | contents of the generated private key file |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | the key password (empty if none) |
+
+The matching **public** key is committed in
+[`src-tauri/tauri.conf.json`](src-tauri/tauri.conf.json) under
+`plugins.updater.pubkey`. To add the secrets:
+
+```bash
+gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.diskwipe-signing/diskwipe.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --body ""
+```
+
+Cut a release by pushing a tag:
+
+```bash
+git tag -a v0.1.1 -m "DiskWipe.IO v0.1.1" && git push origin v0.1.1
+```
+
+CI then builds, signs and publishes the installers plus the `latest.json`
+update manifest to the GitHub Release.
 
 ## 🤝 Contributing
 

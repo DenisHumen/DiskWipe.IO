@@ -15,7 +15,7 @@ const CRITICAL_ATTRS: [u64; 5] = [
 ];
 
 pub fn available() -> bool {
-    util::run_capture("smartctl", &["--version"])
+    util::run_capture(&util::smartctl_bin(), &["--version"])
         .map(|o| o.success)
         .unwrap_or(false)
 }
@@ -50,7 +50,7 @@ fn invoke_smartctl(device: &str, dtype: Option<&str>) -> Result<Value, String> {
         args.push(t);
     }
     args.push(device);
-    let out = util::run_capture("smartctl", &args)?;
+    let out = util::run_capture(&util::smartctl_bin(), &args)?;
     let text = if out.stdout.trim().is_empty() {
         out.stderr
     } else {

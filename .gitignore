@@ -15,6 +15,10 @@ src-tauri/gen/schemas/
 # Generated logo raster (regenerated from assets/logo.svg)
 assets/logo-1024.png
 
+# Bundled binaries fetched at build time (CI). Keep the folder via .gitkeep.
+src-tauri/resources/bin/smartctl
+src-tauri/resources/bin/smartctl.exe
+
 # Editor / OS
 .DS_Store
 .idea/

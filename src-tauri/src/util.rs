@@ -1,6 +1,25 @@
 //! Small process / privilege helpers used across the backend.
 
 use std::process::Command;
+use std::sync::OnceLock;
+
+/// Absolute path to a bundled `smartctl`, resolved once at startup. When the
+/// app ships its own copy (inside the installer) this points at it; otherwise
+/// the code falls back to a `smartctl` discoverable on `PATH`.
+static SMARTCTL: OnceLock<String> = OnceLock::new();
+
+/// Record the path to the bundled smartctl executable (best effort).
+pub fn set_smartctl(path: String) {
+    let _ = SMARTCTL.set(path);
+}
+
+/// The smartctl command to invoke: the bundled binary if known, else `smartctl`.
+pub fn smartctl_bin() -> String {
+    SMARTCTL
+        .get()
+        .cloned()
+        .unwrap_or_else(|| "smartctl".to_string())
+}
 
 pub struct CmdOutput {
     pub stdout: String,
