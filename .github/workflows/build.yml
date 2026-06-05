@@ -8,6 +8,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Needed so tauri-action can create the GitHub Release and upload installers.
+permissions:
+  contents: write
+
 jobs:
   # ---------------------------------------------------------------------------
   # Fast checks: TypeScript build + Rust unit tests
@@ -37,6 +41,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Cross-platform installers: Windows .exe/.msi, Linux .deb/.AppImage/.rpm
+  # On a "v*" tag push these are published to a GitHub Release automatically.
   # ---------------------------------------------------------------------------
   build:
     needs: check
@@ -72,11 +77,34 @@ jobs:
       # Builds the frontend (beforeBuildCommand) and bundles native installers.
       # On Linux, "targets": "all" produces .deb, .AppImage and .rpm
       # (Ubuntu + Fedora compatible). On Windows it produces .exe (NSIS) + .msi.
+      #
+      # When triggered by a tag (refs/tags/v*), `tagName` is set, which makes
+      # tauri-action create/update a GitHub Release and attach every installer
+      # to it. On branch pushes `tagName` is empty -> no release is made.
       - name: Build application
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('DiskWipe.IO {0}', github.ref_name) || '' }}
+          releaseBody: |
+            ## DiskWipe.IO ${{ github.ref_name }}
 
+            Download the installer for your platform below.
+
+            | Platform | File |
+            | -------- | ---- |
+            | Windows  | `.exe` (installer) or `.msi` |
+            | Ubuntu/Debian | `.deb` or `.AppImage` |
+            | Fedora/RHEL | `.rpm` or `.AppImage` |
+
+            > Requires **smartmontools** (`smartctl`) for SMART data, and
+            > administrator / root privileges to format disks.
+          releaseDraft: false
+          prerelease: false
+
+      # Always keep raw artifacts on the workflow run too (handy for branch builds).
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

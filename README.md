@@ -46,6 +46,17 @@ erase, and export a SMART report to PDF — all from one clean, Claude-inspired 
 > macOS is supported as a **development host** for reading disks; formatting is
 > intentionally disabled there.
 
+## 📥 Download
+
+Grab the latest installers from the
+[**Releases**](https://github.com/DenisHumen/DiskWipe.IO/releases) page:
+
+- **Windows** — `DiskWipe.IO_x.y.z_x64-setup.exe` or `.msi`
+- **Ubuntu / Debian** — `.deb` or the portable `.AppImage`
+- **Fedora / RHEL** — `.rpm` or the portable `.AppImage`
+
+Releases are built automatically by CI whenever a `vX.Y.Z` tag is pushed.
+
 ## 🔒 Safety model
 
 DiskWipe.IO touches raw block devices, so it is deliberately cautious. Before
