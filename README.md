@@ -9,7 +9,7 @@
 Read drive health like *CrystalDiskInfo*, run a quick or full sector-by-sector
 erase, and export a SMART report to PDF — all from one clean, Claude-inspired app.
 
-[![Build](https://github.com/DiskWipe-IO/DiskWipe.IO/actions/workflows/build.yml/badge.svg)](https://github.com/DiskWipe-IO/DiskWipe.IO/actions/workflows/build.yml)
+[![Build](https://github.com/DenisHumen/DiskWipe.IO/actions/workflows/build.yml/badge.svg)](https://github.com/DenisHumen/DiskWipe.IO/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-d97757.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Ubuntu%20%7C%20Fedora-1a1916)
 
