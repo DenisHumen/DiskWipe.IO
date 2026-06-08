@@ -1,8 +1,26 @@
 import { useState } from "react";
-import { Thermometer, Clock, RotateCw, FileDown, Activity } from "lucide-react";
-import type { DiskInfo, SmartReport } from "../types";
+import {
+  Thermometer,
+  Clock,
+  RotateCw,
+  FileDown,
+  HardDrive,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldX,
+  ShieldQuestion,
+  CheckCircle2,
+} from "lucide-react";
+import type { AttrStatus, DiskInfo, SmartReport } from "../types";
 import { formatBytes } from "../lib/format";
 import { saveSmartPdf } from "../lib/pdf";
+import {
+  attributeView,
+  nvmeViews,
+  healthSummary,
+  humanHours,
+  statusLabel,
+} from "../lib/smartMeta";
 import { HealthBadge, Stat, Skeleton } from "./ui";
 
 export function SmartPanel({
@@ -38,6 +56,7 @@ export function SmartPanel({
     return (
       <div className="space-y-4">
         <Skeleton className="h-7 w-64" />
+        <Skeleton className="h-24 w-full" />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-20" />
@@ -63,37 +82,50 @@ export function SmartPanel({
 
   if (!report) return null;
 
+  const tempStatus: AttrStatus =
+    report.temperatureC == null
+      ? "ok"
+      : report.temperatureC >= 65
+      ? "bad"
+      : report.temperatureC >= 55
+      ? "warn"
+      : "ok";
+
   return (
     <div className="animate-fade-in space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Header: device identity + actions */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Activity size={20} className="text-clay" />
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-clay/10 text-clay">
+            <HardDrive size={20} />
+          </div>
           <div>
-            <h2 className="text-lg font-semibold text-ink">{report.model}</h2>
+            <h2 className="text-lg font-semibold leading-tight text-ink">
+              {report.model || disk.model || "Unknown drive"}
+            </h2>
             <p className="font-mono text-xs text-ink-muted">
-              {report.serial} · {report.firmware} · {report.protocol}
+              {[report.serial, report.firmware, report.protocol]
+                .filter(Boolean)
+                .join(" · ")}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <HealthBadge health={report.overall} />
-          <button
-            className="btn-primary"
-            onClick={handleSave}
-            disabled={saving}
-          >
-            <FileDown size={15} />
-            {saving ? "Saving…" : "Save PDF"}
-          </button>
-        </div>
+        <button className="btn-primary" onClick={handleSave} disabled={saving}>
+          <FileDown size={15} />
+          {saving ? "Saving…" : "Save PDF"}
+        </button>
       </div>
 
+      <HealthSummaryCard report={report} />
+
       {savedPath && (
-        <div className="card border-ok/30 bg-ok/5 px-4 py-2.5 text-sm text-ok">
+        <div className="card flex items-center gap-2 border-ok/30 bg-ok/5 px-4 py-2.5 text-sm text-ok">
+          <CheckCircle2 size={16} />
           Report saved to <span className="font-mono">{savedPath}</span>
         </div>
       )}
 
+      {/* Key metrics */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat
           label="Capacity"
@@ -102,10 +134,27 @@ export function SmartPanel({
         <Stat
           label="Temperature"
           value={
-            <span className="inline-flex items-center gap-1.5">
-              <Thermometer size={16} className="text-ink-muted" />
+            <span
+              className={`inline-flex items-center gap-1.5 ${
+                tempStatus === "bad"
+                  ? "text-bad"
+                  : tempStatus === "warn"
+                  ? "text-warn"
+                  : "text-ink"
+              }`}
+            >
+              <Thermometer size={16} />
               {report.temperatureC != null ? `${report.temperatureC}°C` : "—"}
             </span>
+          }
+          hint={
+            report.temperatureC != null
+              ? tempStatus === "bad"
+                ? "Running hot"
+                : tempStatus === "warn"
+                ? "Warm"
+                : "Normal range"
+              : undefined
           }
         />
         <Stat
@@ -113,8 +162,15 @@ export function SmartPanel({
           value={
             <span className="inline-flex items-center gap-1.5">
               <Clock size={16} className="text-ink-muted" />
-              {report.powerOnHours != null ? report.powerOnHours : "—"}
+              {report.powerOnHours != null
+                ? report.powerOnHours.toLocaleString("en-US")
+                : "—"}
             </span>
+          }
+          hint={
+            report.powerOnHours != null && report.powerOnHours > 0
+              ? `≈ ${humanHours(report.powerOnHours)} in service`
+              : undefined
           }
         />
         <Stat
@@ -122,15 +178,15 @@ export function SmartPanel({
           value={
             <span className="inline-flex items-center gap-1.5">
               <RotateCw size={16} className="text-ink-muted" />
-              {report.powerCycles != null ? report.powerCycles : "—"}
+              {report.powerCycles != null
+                ? report.powerCycles.toLocaleString("en-US")
+                : "—"}
             </span>
           }
         />
       </div>
 
-      {report.attributes.length > 0 && (
-        <AttributesTable report={report} />
-      )}
+      {report.attributes.length > 0 && <AttributesTable report={report} />}
 
       {report.nvme && Object.keys(report.nvme).length > 0 && (
         <NvmePanel nvme={report.nvme} />
@@ -139,77 +195,181 @@ export function SmartPanel({
   );
 }
 
+function HealthSummaryCard({ report }: { report: SmartReport }) {
+  const summary = healthSummary(report);
+  const tone =
+    report.overall === "good"
+      ? {
+          ring: "border-ok/30 bg-ok/[0.06]",
+          icon: <ShieldCheck size={26} className="text-ok" />,
+        }
+      : report.overall === "caution"
+      ? {
+          ring: "border-warn/30 bg-warn/[0.06]",
+          icon: <ShieldAlert size={26} className="text-warn" />,
+        }
+      : report.overall === "bad"
+      ? {
+          ring: "border-bad/30 bg-bad/[0.06]",
+          icon: <ShieldX size={26} className="text-bad" />,
+        }
+      : {
+          ring: "border-line bg-canvas-inset/40",
+          icon: <ShieldQuestion size={26} className="text-ink-muted" />,
+        };
+
+  return (
+    <div className={`card flex gap-4 border p-5 ${tone.ring}`}>
+      <div className="mt-0.5 shrink-0">{tone.icon}</div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <h3 className="text-base font-semibold text-ink">{summary.title}</h3>
+          <HealthBadge health={report.overall} />
+        </div>
+        <p className="mt-1.5 text-sm leading-relaxed text-ink-muted">
+          {summary.message}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          <CountChip n={summary.okCount} label="OK" cls="bg-ok/12 text-ok" />
+          {summary.warnCount > 0 && (
+            <CountChip
+              n={summary.warnCount}
+              label="Watch"
+              cls="bg-warn/12 text-warn"
+            />
+          )}
+          {summary.badCount > 0 && (
+            <CountChip
+              n={summary.badCount}
+              label="Critical"
+              cls="bg-bad/12 text-bad"
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CountChip({
+  n,
+  label,
+  cls,
+}: {
+  n: number;
+  label: string;
+  cls: string;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium ${cls}`}
+    >
+      <span className="tabular-nums">{n}</span>
+      {label}
+    </span>
+  );
+}
+
+function StatusPill({ status }: { status: AttrStatus }) {
+  const cls =
+    status === "bad"
+      ? "bg-bad/15 text-bad"
+      : status === "warn"
+      ? "bg-warn/15 text-warn"
+      : "bg-ok/12 text-ok";
+  const dot =
+    status === "bad" ? "bg-bad" : status === "warn" ? "bg-warn" : "bg-ok";
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium ${cls}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      {statusLabel(status)}
+    </span>
+  );
+}
+
 function AttributesTable({ report }: { report: SmartReport }) {
+  const rows = report.attributes.map(attributeView);
   return (
     <div className="card overflow-hidden">
-      <div className="border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-ink-faint">
-        S.M.A.R.T. Attributes
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <span className="text-xs font-semibold uppercase tracking-wider text-ink-faint">
+          S.M.A.R.T. Attributes
+        </span>
+        <span className="text-xs text-ink-faint">
+          {rows.length} monitored values
+        </span>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-ink-faint">
-              <th className="px-4 py-2 font-medium">ID</th>
-              <th className="px-4 py-2 font-medium">Attribute</th>
-              <th className="px-4 py-2 text-right font-medium">Value</th>
-              <th className="px-4 py-2 text-right font-medium">Worst</th>
-              <th className="px-4 py-2 text-right font-medium">Thresh</th>
-              <th className="px-4 py-2 text-right font-medium">Raw</th>
-            </tr>
-          </thead>
-          <tbody>
-            {report.attributes.map((a) => (
-              <tr
-                key={a.id}
-                className="border-t border-line-soft hover:bg-line-soft/40"
-              >
-                <td className="px-4 py-2 font-mono text-ink-muted">{a.id}</td>
-                <td className="px-4 py-2 text-ink">{a.name}</td>
-                <td className="px-4 py-2 text-right tabular-nums text-ink">
-                  {a.value}
-                </td>
-                <td className="px-4 py-2 text-right tabular-nums text-ink-muted">
-                  {a.worst}
-                </td>
-                <td className="px-4 py-2 text-right tabular-nums text-ink-muted">
-                  {a.threshold}
-                </td>
-                <td
-                  className={`px-4 py-2 text-right font-mono tabular-nums ${
-                    a.status === "bad"
-                      ? "text-bad"
-                      : a.status === "warn"
-                      ? "text-warn"
-                      : "text-ink"
-                  }`}
-                >
+      <div className="divide-y divide-line-soft">
+        {rows.map((a) => (
+          <div
+            key={a.id}
+            className="flex flex-col gap-2 px-4 py-3 transition-colors hover:bg-line-soft/40 sm:flex-row sm:items-center sm:gap-4"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[11px] text-ink-faint">
+                  #{a.id}
+                </span>
+                <span className="truncate text-sm font-medium text-ink">
+                  {a.label}
+                </span>
+              </div>
+              <p className="mt-0.5 text-xs leading-snug text-ink-muted">
+                {a.description}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-4">
+              <div className="text-right">
+                <div className="font-mono text-sm tabular-nums text-ink">
                   {a.raw}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </div>
+                <div className="text-[11px] tabular-nums text-ink-faint">
+                  val {a.value} · thr {a.threshold}
+                </div>
+              </div>
+              <StatusPill status={a.status} />
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
 function NvmePanel({ nvme }: { nvme: Record<string, number> }) {
+  const rows = nvmeViews(nvme);
   return (
     <div className="card overflow-hidden">
       <div className="border-b border-line px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-ink-faint">
         NVMe Health Log
       </div>
-      <div className="grid grid-cols-1 gap-x-8 gap-y-px p-2 sm:grid-cols-2">
-        {Object.entries(nvme).map(([k, v]) => (
+      <div className="grid grid-cols-1 gap-px bg-line-soft sm:grid-cols-2">
+        {rows.map((r) => (
           <div
-            key={k}
-            className="flex items-center justify-between rounded-md px-3 py-2 hover:bg-line-soft/40"
+            key={r.key}
+            className="flex items-start justify-between gap-3 bg-canvas-raised px-4 py-3"
           >
-            <span className="text-sm capitalize text-ink-muted">
-              {k.replace(/_/g, " ")}
-            </span>
-            <span className="font-mono text-sm tabular-nums text-ink">{v}</span>
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-ink">{r.label}</div>
+              <p className="mt-0.5 text-xs leading-snug text-ink-muted">
+                {r.description}
+              </p>
+            </div>
+            <div className="shrink-0 text-right">
+              <div
+                className={`font-mono text-sm tabular-nums ${
+                  r.status === "bad"
+                    ? "text-bad"
+                    : r.status === "warn"
+                    ? "text-warn"
+                    : "text-ink"
+                }`}
+              >
+                {r.display}
+              </div>
+            </div>
           </div>
         ))}
       </div>
