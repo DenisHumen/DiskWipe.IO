@@ -1,7 +1,7 @@
 {
   "name": "diskwipe-io",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "DiskWipe.IO — SMART disk monitoring and secure formatting for Windows & Linux",
   "scripts": {
