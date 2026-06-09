@@ -84,15 +84,65 @@ jobs:
           chmod +x src-tauri/resources/bin/smartctl
           src-tauri/resources/bin/smartctl --version | head -1
 
+      # smartmontools is fetched from SourceForge, whose mirrors intermittently
+      # return 404 / drop the connection. Retry Chocolatey, then fall back to a
+      # checksum-pinned direct download + silent install so a single bad mirror
+      # can't fail the release.
       - name: Bundle smartctl (Windows)
         if: matrix.label == 'windows'
         shell: pwsh
         run: |
-          choco install smartmontools -y --no-progress
-          $exe = Get-ChildItem -Path 'C:\Program Files\smartmontools','C:\Program Files (x86)\smartmontools' -Recurse -Filter smartctl.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          $ErrorActionPreference = 'Stop'
+          $dest = 'src-tauri/resources/bin/smartctl.exe'
+          $ver  = '7.5'
+          $sha  = '896337fcc253220614cf8cdbd5cf2321c5aa326a37a04160a672a281e6104c70'
+
+          function Find-Smartctl {
+            Get-ChildItem -Path 'C:\Program Files\smartmontools',
+                                'C:\Program Files (x86)\smartmontools',
+                                'C:\smartmontools' `
+              -Recurse -Filter smartctl.exe -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+          }
+
+          $exe = $null
+
+          # 1) Chocolatey (checksum-verified), retried for transient mirror errors.
+          for ($i = 1; $i -le 3 -and -not $exe; $i++) {
+            Write-Host "choco install smartmontools (attempt $i)"
+            choco install smartmontools -y --no-progress
+            $exe = Find-Smartctl
+            if (-not $exe -and $i -lt 3) { Start-Sleep -Seconds 15 }
+          }
+
+          # 2) Fallback: download the NSIS installer (pinned hash) and silent-install it.
+          if (-not $exe) {
+            $urls = @(
+              "https://master.dl.sourceforge.net/project/smartmontools/smartmontools/$ver/smartmontools-$ver.win32-setup.exe?viasf=1",
+              "https://downloads.sourceforge.net/project/smartmontools/smartmontools/$ver/smartmontools-$ver.win32-setup.exe"
+            )
+            $pkg = Join-Path $env:RUNNER_TEMP 'smartmontools-setup.exe'
+            foreach ($url in $urls) {
+              if ($exe) { break }
+              for ($i = 1; $i -le 3 -and -not $exe; $i++) {
+                try {
+                  Write-Host "Downloading $url (attempt $i)"
+                  Invoke-WebRequest -Uri $url -OutFile $pkg -UseBasicParsing -TimeoutSec 180
+                  $got = (Get-FileHash $pkg -Algorithm SHA256).Hash.ToLower()
+                  if ($got -ne $sha) { throw "checksum mismatch: $got" }
+                  Start-Process -FilePath $pkg -ArgumentList '/S','/D=C:\smartmontools' -Wait
+                  $exe = Find-Smartctl
+                } catch {
+                  Write-Host "  attempt failed: $($_.Exception.Message)"
+                  Start-Sleep -Seconds 15
+                }
+              }
+            }
+          }
+
           if (-not $exe) { throw 'smartctl.exe not found after install' }
-          Copy-Item $exe.FullName 'src-tauri/resources/bin/smartctl.exe' -Force
-          & 'src-tauri/resources/bin/smartctl.exe' --version | Select-Object -First 1
+          Copy-Item $exe.FullName $dest -Force
+          & $dest --version | Select-Object -First 1
 
       - run: npm ci
 
