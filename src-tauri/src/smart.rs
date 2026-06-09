@@ -26,21 +26,27 @@ pub fn report(device: &str) -> Result<SmartReport, String> {
 }
 
 fn run_smartctl(device: &str) -> Result<Value, String> {
-    // Try each candidate device spelling / device-type in turn and keep the
-    // first response that actually carries SMART data. Different drives need
-    // different hints: NVMe SSDs want `-d nvme`, USB bridges want `-d sat`,
-    // and on Windows the raw `\\.\PhysicalDriveN` handle sometimes only works
-    // under an explicit type or the `/dev/sdX` spelling.
+    // Try each candidate device spelling / device-type in turn. Different drives
+    // need different hints: NVMe SSDs want `-d nvme`, USB-SATA bridges want
+    // `-d sat` (or a vendor-specific `-d usbjmicron`/`usbprolific`/…), and on
+    // Windows the raw `\\.\PhysicalDriveN` handle sometimes only works under an
+    // explicit type or the `/dev/sdX` spelling.
+    //
+    // Prefer the first response with *rich* data (an ATA attribute table or an
+    // NVMe health log) and only fall back to a bare overall-status response when
+    // nothing richer turns up. This matters for USB bridges, where the auto
+    // probe often answers in SCSI mode with just `smart_status` and no
+    // attributes; without this we'd stop there and never reach the `-d sat`
+    // probe that returns the full health data (the way CrystalDiskInfo does).
+    let mut weak: Option<Value> = None;
     let mut last: Option<Value> = None;
+
     for (dev, dtype) in candidate_invocations(device) {
-        match invoke_smartctl(&dev, dtype, false) {
-            Ok(v) => {
-                if has_smart_payload(&v) {
-                    return Ok(v);
-                }
-                last = Some(v);
+        if let Ok(v) = invoke_smartctl(&dev, dtype, false) {
+            if has_rich_payload(&v) {
+                return Ok(v);
             }
-            Err(_) => continue,
+            remember(&mut weak, &mut last, v);
         }
     }
 
@@ -53,8 +59,8 @@ fn run_smartctl(device: &str) -> Result<Value, String> {
     if cfg!(target_os = "linux") && !util::is_admin() {
         for (dev, dtype) in candidate_invocations(device) {
             match invoke_smartctl(&dev, dtype, true) {
-                Ok(v) if has_smart_payload(&v) => return Ok(v),
-                Ok(v) => last = Some(v),
+                Ok(v) if has_rich_payload(&v) => return Ok(v),
+                Ok(v) => remember(&mut weak, &mut last, v),
                 // pkexec missing, or the auth dialog was dismissed — stop asking
                 // rather than popping a fresh prompt for the next candidate.
                 Err(_) => break,
@@ -62,45 +68,73 @@ fn run_smartctl(device: &str) -> Result<Value, String> {
         }
     }
 
-    last.ok_or_else(|| format!("smartctl returned no usable data for {device}"))
+    weak.or(last)
+        .ok_or_else(|| format!("smartctl returned no usable data for {device}"))
 }
 
-/// Whether a parsed smartctl response carries any usable health payload.
-fn has_smart_payload(v: &Value) -> bool {
+/// Stash a probe response: keep the first one with any payload as the `weak`
+/// fallback, and always update `last` so we can surface *something* on failure.
+fn remember(weak: &mut Option<Value>, last: &mut Option<Value>, v: Value) {
+    if weak.is_none() && has_smart_payload(&v) {
+        *weak = Some(v.clone());
+    }
+    *last = Some(v);
+}
+
+/// Whether a response carries full SMART detail — an ATA attribute table or an
+/// NVMe health log — as opposed to only an overall pass/fail status.
+fn has_rich_payload(v: &Value) -> bool {
     v.get("ata_smart_attributes").is_some()
         || v.get("nvme_smart_health_information_log").is_some()
-        || v.get("smart_status").is_some()
 }
+
+/// Whether a response carries any usable health payload at all (rich detail, or
+/// at least an overall `smart_status`).
+fn has_smart_payload(v: &Value) -> bool {
+    has_rich_payload(v) || v.get("smart_status").is_some()
+}
+
+/// Device-type hints to probe, in priority order. Covers internal SATA/NVMe
+/// plus the USB-to-SATA and USB-to-NVMe bridges that need an explicit
+/// pass-through type — the same fallbacks CrystalDiskInfo walks through. The
+/// first probe that returns rich SMART data wins, so cheap auto/NVMe/SAT hits
+/// short-circuit before the vendor-specific bridge types are ever tried.
+const DEVICE_TYPES: [Option<&str>; 13] = [
+    None,                // auto-detect (internal SATA/NVMe, modern USB bridges)
+    Some("nvme"),        // NVMe SSDs (internal, and some USB-NVMe enclosures)
+    Some("sat"),         // USB-SATA bridges — ATA pass-through over SCSI
+    Some("sat,16"),      // bridges needing 16-byte ATA pass-through
+    Some("sat,12"),      // bridges needing 12-byte ATA pass-through
+    Some("usbjmicron"),  // JMicron USB-SATA bridges
+    Some("usbprolific"), // Prolific USB-SATA bridges
+    Some("usbsunplus"),  // SunplusIT USB-SATA bridges
+    Some("usbcypress"),  // Cypress USB-SATA bridges
+    Some("sntjmicron"),  // JMicron USB-NVMe enclosures
+    Some("sntasmedia"),  // ASMedia USB-NVMe enclosures
+    Some("ata"),         // direct ATA pass-through
+    Some("scsi"),        // last-resort SCSI fallback
+];
 
 /// Ordered list of `(device, device-type)` pairs to probe for a given disk.
 fn candidate_invocations(device: &str) -> Vec<(String, Option<&'static str>)> {
+    #[allow(unused_mut)] // `list` is only mutated on Windows (the /dev/sdX block)
+    let mut list: Vec<(String, Option<&'static str>)> =
+        DEVICE_TYPES.iter().map(|&t| (device.to_string(), t)).collect();
+
+    // Some smartmontools builds on Windows only accept the Unix-style `/dev/sdX`
+    // spelling, where X maps PhysicalDrive0 -> a, 1 -> b, and so on.
     #[cfg(target_os = "windows")]
-    {
-        let mut list: Vec<(String, Option<&'static str>)> = vec![
-            (device.to_string(), None),        // auto-detect (SATA/ATA)
-            (device.to_string(), Some("nvme")), // NVMe SSDs
-            (device.to_string(), Some("sat")),  // USB / SAT bridges
-            (device.to_string(), Some("ata")),  // direct ATA pass-through
-        ];
-        // Some smartmontools builds only accept the Unix-style `/dev/sdX`
-        // spelling, where X maps PhysicalDrive0 -> a, 1 -> b, and so on.
-        if let Some(n) = crate::util::trailing_number(device) {
-            if n < 26 {
-                let letter = (b'a' + n as u8) as char;
-                let sd = format!("/dev/sd{letter}");
-                list.push((sd.clone(), None));
-                list.push((sd, Some("nvme")));
-            }
+    if let Some(n) = crate::util::trailing_number(device) {
+        if n < 26 {
+            let letter = (b'a' + n as u8) as char;
+            let sd = format!("/dev/sd{letter}");
+            list.push((sd.clone(), None));
+            list.push((sd.clone(), Some("sat")));
+            list.push((sd, Some("nvme")));
         }
-        list
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        vec![
-            (device.to_string(), None),
-            (device.to_string(), Some("sat")),
-        ]
-    }
+
+    list
 }
 
 fn invoke_smartctl(device: &str, dtype: Option<&str>, elevate: bool) -> Result<Value, String> {
@@ -362,5 +396,33 @@ mod tests {
             args,
             ["/usr/lib/app/bin/smartctl", "-j", "-a", "-d", "sat", "/dev/sda"]
         );
+    }
+
+    #[test]
+    fn candidates_cover_usb_bridge_types() {
+        let c = candidate_invocations("/dev/sda");
+        let types: Vec<Option<&str>> = c.iter().map(|(_, t)| *t).collect();
+        // Auto first (fast path for internal disks), then the USB fallbacks.
+        assert_eq!(types[0], None);
+        for t in ["sat", "sat,16", "usbjmicron", "usbprolific", "sntjmicron", "scsi"] {
+            assert!(types.contains(&Some(t)), "missing -d {t}");
+        }
+        // The device string is carried through every probe.
+        assert!(c.iter().all(|(d, _)| d.starts_with("/dev/sd")));
+    }
+
+    #[test]
+    fn distinguishes_rich_from_bare_status() {
+        let rich: Value = serde_json::from_str(r#"{"ata_smart_attributes":{"table":[]}}"#).unwrap();
+        let nvme: Value =
+            serde_json::from_str(r#"{"nvme_smart_health_information_log":{}}"#).unwrap();
+        let bare: Value = serde_json::from_str(r#"{"smart_status":{"passed":true}}"#).unwrap();
+        let empty: Value = serde_json::from_str("{}").unwrap();
+
+        assert!(has_rich_payload(&rich));
+        assert!(has_rich_payload(&nvme));
+        assert!(!has_rich_payload(&bare)); // overall status only, no detail
+        assert!(has_smart_payload(&bare));
+        assert!(!has_smart_payload(&empty));
     }
 }
