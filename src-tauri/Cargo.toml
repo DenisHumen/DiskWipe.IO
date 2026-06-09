@@ -1,6 +1,6 @@
 [package]
 name = "diskwipe-io"
-version = "0.1.5"
+version = "0.1.6"
 description = "DiskWipe.IO — SMART monitoring and secure disk formatting"
 authors = ["DiskWipe.IO contributors"]
 edition = "2021"

@@ -115,24 +115,33 @@ const DEVICE_TYPES: [Option<&str>; 13] = [
     Some("scsi"),        // last-resort SCSI fallback
 ];
 
+/// Map a Windows `\\.\PhysicalDriveN` handle to smartctl's own `/dev/sdN`
+/// spelling (PhysicalDrive0 -> a, 1 -> b, …). smartctl reaches `/dev/sdN`
+/// through the SCSI pass-through interface, which works for UAS USB bridges —
+/// the raw `\\.\PhysicalDriveN` handle rejects SAT/ATA pass-through on those
+/// with "Invalid argument". Returns None when there's no trailing number < 26.
+#[allow(dead_code)] // used on Windows; exercised by tests on every platform
+fn windows_sd_alias(device: &str) -> Option<String> {
+    let n = crate::util::trailing_number(device)?;
+    (n < 26).then(|| format!("/dev/sd{}", (b'a' + n as u8) as char))
+}
+
 /// Ordered list of `(device, device-type)` pairs to probe for a given disk.
 fn candidate_invocations(device: &str) -> Vec<(String, Option<&'static str>)> {
-    #[allow(unused_mut)] // `list` is only mutated on Windows (the /dev/sdX block)
-    let mut list: Vec<(String, Option<&'static str>)> =
-        DEVICE_TYPES.iter().map(|&t| (device.to_string(), t)).collect();
+    let mut list: Vec<(String, Option<&'static str>)> = Vec::new();
 
-    // Some smartmontools builds on Windows only accept the Unix-style `/dev/sdX`
-    // spelling, where X maps PhysicalDrive0 -> a, 1 -> b, and so on.
+    // On Windows, probe smartctl's `/dev/sdN` spelling *first*. It reaches the
+    // drive through the SCSI pass-through interface, which works for UAS USB
+    // bridges; the raw `\\.\PhysicalDriveN` handle rejects SAT pass-through on
+    // those with "Invalid argument", so trying it first would waste a dozen
+    // failing probes before the working one.
     #[cfg(target_os = "windows")]
-    if let Some(n) = crate::util::trailing_number(device) {
-        if n < 26 {
-            let letter = (b'a' + n as u8) as char;
-            let sd = format!("/dev/sd{letter}");
-            list.push((sd.clone(), None));
-            list.push((sd.clone(), Some("sat")));
-            list.push((sd, Some("nvme")));
-        }
+    if let Some(sd) = windows_sd_alias(device) {
+        list.extend(DEVICE_TYPES.iter().map(|&t| (sd.clone(), t)));
     }
+
+    // The device as given — the only form on Linux/macOS, the fallback on Windows.
+    list.extend(DEVICE_TYPES.iter().map(|&t| (device.to_string(), t)));
 
     list
 }
@@ -409,6 +418,15 @@ mod tests {
         }
         // The device string is carried through every probe.
         assert!(c.iter().all(|(d, _)| d.starts_with("/dev/sd")));
+    }
+
+    #[test]
+    fn maps_physicaldrive_to_sd_alias() {
+        // Windows UAS fix: PhysicalDriveN -> /dev/sd(a+N) for SCSI pass-through.
+        assert_eq!(windows_sd_alias(r"\\.\PhysicalDrive0").as_deref(), Some("/dev/sda"));
+        assert_eq!(windows_sd_alias(r"\\.\PhysicalDrive2").as_deref(), Some("/dev/sdc"));
+        assert_eq!(windows_sd_alias(r"\\.\PhysicalDrive26"), None); // out of a-z range
+        assert_eq!(windows_sd_alias("/dev/sda"), None); // no trailing number
     }
 
     #[test]
