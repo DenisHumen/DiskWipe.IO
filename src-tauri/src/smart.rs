@@ -33,7 +33,7 @@ fn run_smartctl(device: &str) -> Result<Value, String> {
     // under an explicit type or the `/dev/sdX` spelling.
     let mut last: Option<Value> = None;
     for (dev, dtype) in candidate_invocations(device) {
-        match invoke_smartctl(&dev, dtype) {
+        match invoke_smartctl(&dev, dtype, false) {
             Ok(v) => {
                 if has_smart_payload(&v) {
                     return Ok(v);
@@ -43,6 +43,25 @@ fn run_smartctl(device: &str) -> Result<Value, String> {
             Err(_) => continue,
         }
     }
+
+    // Reading a raw device requires root on Linux. When the app runs
+    // unprivileged and the bundled smartctl wasn't granted file capabilities at
+    // install time (the AppImage build, or a filesystem without xattrs), retry
+    // through `pkexec`, which pops a graphical PolicyKit prompt so the user can
+    // authenticate once. On Windows this never runs (UAC already elevates the
+    // whole process); on macOS it is a dev-only host with no devices to read.
+    if cfg!(target_os = "linux") && !util::is_admin() {
+        for (dev, dtype) in candidate_invocations(device) {
+            match invoke_smartctl(&dev, dtype, true) {
+                Ok(v) if has_smart_payload(&v) => return Ok(v),
+                Ok(v) => last = Some(v),
+                // pkexec missing, or the auth dialog was dismissed — stop asking
+                // rather than popping a fresh prompt for the next candidate.
+                Err(_) => break,
+            }
+        }
+    }
+
     last.ok_or_else(|| format!("smartctl returned no usable data for {device}"))
 }
 
@@ -84,20 +103,43 @@ fn candidate_invocations(device: &str) -> Vec<(String, Option<&'static str>)> {
     }
 }
 
-fn invoke_smartctl(device: &str, dtype: Option<&str>) -> Result<Value, String> {
-    let mut args = vec!["-j", "-a"];
-    if let Some(t) = dtype {
-        args.push("-d");
-        args.push(t);
-    }
-    args.push(device);
-    let out = util::run_capture(&util::smartctl_bin(), &args)?;
+fn invoke_smartctl(device: &str, dtype: Option<&str>, elevate: bool) -> Result<Value, String> {
+    let (cmd, args) = build_invocation(&util::smartctl_bin(), device, dtype, elevate);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = util::run_capture(&cmd, &arg_refs)?;
     let text = if out.stdout.trim().is_empty() {
         out.stderr
     } else {
         out.stdout
     };
     serde_json::from_str(&text).map_err(|e| format!("could not parse smartctl output: {e}"))
+}
+
+/// Build the `(command, args)` for a single smartctl probe. When `elevate` is
+/// set the real command is wrapped in `pkexec`, so smartctl runs as root behind
+/// a graphical PolicyKit prompt — the Linux fallback used when the binary lacks
+/// the capabilities to open the device directly.
+fn build_invocation(
+    bin: &str,
+    device: &str,
+    dtype: Option<&str>,
+    elevate: bool,
+) -> (String, Vec<String>) {
+    let mut smart_args: Vec<String> = vec!["-j".to_string(), "-a".to_string()];
+    if let Some(t) = dtype {
+        smart_args.push("-d".to_string());
+        smart_args.push(t.to_string());
+    }
+    smart_args.push(device.to_string());
+
+    if elevate {
+        let mut args = Vec::with_capacity(smart_args.len() + 1);
+        args.push(bin.to_string());
+        args.extend(smart_args);
+        ("pkexec".to_string(), args)
+    } else {
+        (bin.to_string(), smart_args)
+    }
 }
 
 fn parse_report(device: &str, v: &Value) -> SmartReport {
@@ -302,5 +344,23 @@ mod tests {
         let v: Value = serde_json::from_str("{}").unwrap();
         let r = parse_report("/dev/sdc", &v);
         assert_eq!(r.overall, "unknown");
+    }
+
+    #[test]
+    fn builds_direct_invocation() {
+        let (cmd, args) = build_invocation("/usr/lib/app/bin/smartctl", "/dev/sda", None, false);
+        assert_eq!(cmd, "/usr/lib/app/bin/smartctl");
+        assert_eq!(args, ["-j", "-a", "/dev/sda"]);
+    }
+
+    #[test]
+    fn builds_elevated_invocation_via_pkexec() {
+        let (cmd, args) =
+            build_invocation("/usr/lib/app/bin/smartctl", "/dev/sda", Some("sat"), true);
+        assert_eq!(cmd, "pkexec");
+        assert_eq!(
+            args,
+            ["/usr/lib/app/bin/smartctl", "-j", "-a", "-d", "sat", "/dev/sda"]
+        );
     }
 }
